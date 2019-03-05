@@ -1,0 +1,154 @@
+---
+title: "HW4"
+author: "Louis Jochems"
+date: "March 4, 2019"
+output: word_document
+---
+
+```{r setup }
+library("betareg")
+library("raster")
+library("rgeos")
+library("rgdal")
+library("MASS")
+library("betareg")
+
+# Define function to draw random samples from a multivariate normal
+# distribution
+
+#multivariate normal, represents normal 
+rmvn <- function(n, mu = 0, V = matrix(1)) {
+  p <- length(mu)
+  if (any(is.na(match(dim(V), p)))) 
+    stop("Dimension problem!")
+  D <- chol(V)
+  t(matrix(rnorm(n * p, sd=1), ncol = p) %*% D + rep(mu, rep(n, p)))
+}
+
+# Set up a square lattice region, all possible combination of those numbers (x,y coordinates)
+simgrid <- expand.grid(1:50, 1:50)
+n <- nrow(simgrid)
+
+# Set up distance matrix
+distance <- as.matrix(dist(simgrid))
+# Generate random variable
+
+phi = 0.03 #phi determines scale of distance variation, bigger more noise, smaller more autocorrelation 
+#how does changing phi change the spatial aggregation in the plotted raster?
+plot(1:100, exp(-phi * 1:100), type = "l", xlab = "Distance", ylab = "Correlation")
+
+
+#simulating gamma for predictor, 0.03 because water depth is highly spatially autocorellated 
+phi = 0.03
+
+X <-rmvn(1, rep(2.5, n),exp(-phi * distance)) #n=50*50 from nrow 
+
+X <- rgamma(n,rate=20/exp(rmvn(1, rep(2.5, n),exp(-phi * distance))),shape=20)
+
+
+#a) This predictor is likely to respresent the distribution of my organism because frogbit likely thrives at shallower water depth. It may not establish in too deep of waters, due to wave action and currents. It may like shallower waters because it is protected from such disturbances. Also since water_depth is continuous and positive I chose rgamma() to get random draws for values between 0 and 150 cm depth. 
+#b) My phi value is 0.03 because water depth is highly spatially autocorrelated since at any give depth, the adjacent pixel (in this case) is likely to exhibit a very similar value in depth. 
+
+```
+
+``` {r raster map}
+
+#c) The main constraints on the number of points I can sample are resolution (pixel size) and extent of my raster map. I chose 1000 pixels as n because I would be realistic/robust to sample for frogbit presence/abundance in at least this many pixels within a high resolution (let's say, 10cm) image of a wetland landscape. 
+
+# Visualize results d)
+Xraster <- rasterFromXYZ(cbind(simgrid[, 1:2] - 0.5, X))
+
+
+plot(Xraster)
+
+
+#Converting raster to a dataframe 
+spat_dat=rasterToPoints(Xraster)
+
+
+#how many points can you sample? choose number appropriate for study organism, represents sample points Go subset of spatdat give to neighbor
+GO=sample(x=c(1:nrow(spat_dat)),size=1000)
+
+points(spat_dat[GO,c(1:2)],col="darkolivegreen4", pch=20)
+
+
+```
+
+
+```{r hurdle model}
+#how would you deal with spatial autocorrelation here?
+#based on biology of organism
+presence_intercept=-1.2
+presence_slope=-0.15
+
+
+PA=rbinom(1000,plogis(presence_intercept+spat_dat[GO,3]*presence_slope),
+          size=1)
+
+plot(PA~spat_dat[GO,3])
+
+
+#generating abundance, values depend on FB
+count_intercept=-10
+count_slope=2.5
+quadslope=-0.0998
+phi=1000
+
+mean_relationship=plogis(-10+2.5*spat_dat[GO,3]+-0.0998*spat_dat[GO,3]^2)
+plot(mean_relationship~spat_dat[GO,3]) #deterministic part 
+#beta great stochastic distribution to represent noise of EFB
+fractional_cover=rbeta(1000,shape1=mean_relationship*10,shape2=(1-mean_relationship)*10) 
+plot(fractional_cover~spat_dat[GO,3])
+#hurdle model with Presence/Abundance (0, then abundance doesn't matter), error with this 
+abundance=PA*rbeta(1000,shape1=mean_relationship*1000,shape2=(1-mean_relationship)*1000)
+
+#for percent cover of pixels in remotely sensed image 
+plot(abundance~spat_dat[GO,3], xlab= "Water Depth (cm)",ylab="Frogbit % Cover")
+
+#or nb if we were sampling quadrats in field 
+count_intercept=0.9
+count_slope=-0.001
+over_dispersion=0.95
+
+abundance.nb=PA*rnbinom(1000,mu=exp(count_intercept+count_slope*spat_dat[GO,3]),size=over_dispersion)
+
+plot(abundance.nb~spat_dat[GO,3], xlab="Water Depth (cm)", ylab="Frogbit Count (#/pixel)")
+
+#e) A biological reason for why I might observe a hurdle model with frogbit is because water depth may not only influence whether frogbit is present in a given pixel but also influence its abundance once it establishes in a site. Therefore, we need a hurdle model to assess counts/percent cov in pixels after the threshold of presence (ie. 1) is crossed. 
+#f) We are assuming that these distributions are independent from one another.  
+#g) see both % cov and count plots 
+
+```
+
+
+```{r edwards data}
+tardi=read.csv("tardigrades.csv")
+
+PA1=ifelse(tardi$abundance>0,1,0)
+
+m1=glm(PA1~tardi$silica_content, family="binomial")
+coef(m1)
+plogis(0.54651115)
+confint(m1)
+summary(m1)
+
+plot(PA1~tardi$silica_content)
+
+abundance2 <- tardi$abundance[which(tardi$abundance>0)]
+envcov2 <- tardi$abundance[which(tardi$abundance>0)]
+m2=glm.nb(abundance2~envcov2) #env cov 3 column of spatdat, nb because high dispersion parameter of 30.45
+coef(m2)
+exp(2.437255825)
+confint(m2)
+summary(m2)
+
+plot(abundance2~envcov2)
+
+
+#h)
+
+
+
+#i) I would likely analyze the SA for counts of my data with a correlogram and/or semivariogram. I could also check the phi parameter in the model output (at least in the negative binomial model)
+```
+
